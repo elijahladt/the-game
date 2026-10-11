@@ -100,6 +100,10 @@ export function App() {
 
     const onLobbyUpdated = (data: { match: MatchSummary }) => {
       setMatch(data.match);
+      const myP = Object.values(data.match.players).find((p) => p.username === username);
+      if (myP) {
+        setCurrentPlayerId(myP.id);
+      }
       if (data.match.status === 'in_progress') {
         setWinnerInfo(null);
       }
@@ -107,6 +111,10 @@ export function App() {
 
     const onMatchStarted = (data: { match: MatchSummary }) => {
       setMatch(data.match);
+      const myP = Object.values(data.match.players).find((p) => p.username === username);
+      if (myP) {
+        setCurrentPlayerId(myP.id);
+      }
       setWinnerInfo(null);
       setAnswerFeedback({ status: 'idle', message: '' });
     };

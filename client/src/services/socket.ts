@@ -4,12 +4,14 @@ import type { ClientToServerEvents, ServerToClientEvents } from '@quickfire/shar
 export const SESSION_STORAGE_KEY = 'quickfire_session_token';
 export const SERVER_URL_STORAGE_KEY = 'quickfire_custom_server_url';
 
+export const DEFAULT_PRODUCTION_SERVER = 'https://quickfire-juoc.onrender.com';
+
 export function hasServerConfigured(): boolean {
   try {
     const custom = localStorage.getItem(SERVER_URL_STORAGE_KEY);
     if (custom && custom.trim()) return true;
   } catch {}
-  return !!import.meta.env.VITE_SERVER_URL;
+  return true;
 }
 
 export function resolveServerUrl(): string {
@@ -26,18 +28,19 @@ export function resolveServerUrl(): string {
     return 'http://localhost:3001';
   }
 
-  // If on Vercel or cloud static host without explicit server, don't point to origin (Vercel can't host WebSockets)
-  return '';
+  // Authoritative Render Production Server
+  return DEFAULT_PRODUCTION_SERVER;
 }
 
 const serverUrl = resolveServerUrl();
 
-export let socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(serverUrl || 'http://localhost:3001', {
-  autoConnect: false,
-  reconnection: !!serverUrl,
-  reconnectionAttempts: 5,
+export let socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(serverUrl, {
+  autoConnect: true,
+  transports: ['websocket', 'polling'],
+  reconnection: true,
+  reconnectionAttempts: 15,
   reconnectionDelay: 1000,
-  timeout: 3000,
+  timeout: 5000,
 });
 
 export function updateServerUrl(newUrl: string): void {

@@ -34,8 +34,9 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
   const handleReset = () => {
     localStorage.removeItem('quickfire_custom_server_url');
-    setUrlInput('http://localhost:3001');
-    updateServerUrl('http://localhost:3001');
+    const defaultUrl = 'https://quickfire-juoc.onrender.com';
+    setUrlInput(defaultUrl);
+    updateServerUrl(defaultUrl);
     setSaved(true);
     setTimeout(() => {
       setSaved(false);
