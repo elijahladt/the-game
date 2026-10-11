@@ -43,8 +43,14 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-pop">
-      <div className="relative w-full max-w-md bg-game-surface border border-slate-700 rounded-2xl shadow-2xl p-6 text-slate-100">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-pop"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-md bg-game-surface border border-slate-700 rounded-2xl shadow-2xl p-6 text-slate-100"
+      >
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
