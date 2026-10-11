@@ -157,21 +157,47 @@ export class LocalGameEngine {
 
       const thinkTime = 5000 + Math.random() * 6000;
       const timer = setTimeout(() => {
-        if (this.isCompleted) return;
+        if (this.isCompleted || !this.currentQuestionItem) return;
+
         // Bot has 60% accuracy
         if (Math.random() < 0.6) {
+          const qAnswer = this.currentQuestionItem.canonical_answer;
+          this.currentQuestionItem = null;
+          clearTimeout(this.questionTimer);
+          this.clearBotTimers();
+
           player.roundCorrectAnswers += 1;
           player.totalScore += 1;
           const required = getRequiredAnswersForRound(player.currentRound);
+          let botWonMatch = false;
+
           if (player.roundCorrectAnswers >= required) {
             player.currentRound += 1;
             player.roundCorrectAnswers = 0;
             if (player.currentRound > this.targetRound) {
+              botWonMatch = true;
               this.finishMatch(player.id, player.username);
-              return;
             }
           }
+
+          const user = this.getUserPlayer();
+          this.events.onAnswerResult({
+            correct: false,
+            earnedPoint: false,
+            canonicalAnswer: qAnswer,
+            message: `${player.username} answered correctly first! (+1 Point)`,
+            totalScore: user ? user.totalScore : 0,
+            roundProgress: user ? user.roundCorrectAnswers : 0,
+            requiredForRound: user ? getRequiredAnswersForRound(user.currentRound) : 3,
+          });
+
           this.emitLeaderboard();
+
+          if (!botWonMatch) {
+            setTimeout(() => {
+              if (!this.isCompleted) this.assignNextQuestion();
+            }, 1200);
+          }
         }
       }, thinkTime);
 
@@ -207,7 +233,12 @@ export class LocalGameEngine {
       return { correct: false, earnedPoint: false, message: 'Incorrect answer. Try again!' };
     }
 
-    // Correct!
+    // User is first to answer correctly!
+    const qAnswer = this.currentQuestionItem.canonical_answer;
+    this.currentQuestionItem = null;
+    clearTimeout(this.questionTimer);
+    this.clearBotTimers();
+
     user.correctSubmissions += 1;
     user.totalScore += 1;
     user.roundCorrectAnswers += 1;
@@ -229,7 +260,7 @@ export class LocalGameEngine {
     this.events.onAnswerResult({
       correct: true,
       earnedPoint: true,
-      canonicalAnswer: this.currentQuestionItem.canonical_answer,
+      canonicalAnswer: qAnswer,
       message: 'Correct! +1 Point',
       roundAdvanced,
       newRound: user.currentRound,
@@ -239,9 +270,12 @@ export class LocalGameEngine {
     });
 
     this.emitLeaderboard();
-    this.assignNextQuestion();
 
-    return { correct: true, earnedPoint: true, message: 'Correct!' };
+    setTimeout(() => {
+      if (!this.isCompleted) this.assignNextQuestion();
+    }, 1200);
+
+    return { correct: true, earnedPoint: true, message: 'Correct! +1 Point' };
   }
 
   private finishMatch(winnerId: string, winnerName: string): void {

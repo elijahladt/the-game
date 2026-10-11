@@ -84,6 +84,12 @@ export class Match {
   // Bot loop timers
   private botTimers: Map<string, NodeJS.Timeout> = new Map();
 
+  // Shared active question for all players in this match
+  private currentSharedQuestion: ClientQuestion | null = null;
+  private currentSharedInstanceId: string | null = null;
+  private sharedQuestionTimer: NodeJS.Timeout | null = null;
+  private sharedNextTransitionTimer: NodeJS.Timeout | null = null;
+
   constructor(
     matchId: string,
     roomCode: string,
@@ -116,6 +122,10 @@ export class Match {
     this.addPlayer(hostPlayerId, hostUsername, hostSocketId, true);
   }
 
+  public getPlayersCount(): number {
+    return this.players.size;
+  }
+
   public addPlayer(
     playerId: string,
     username: string,
@@ -125,6 +135,19 @@ export class Match {
   ): boolean {
     if (this.players.size >= this.settings.maxPlayers && !this.players.has(playerId)) {
       return false;
+    }
+
+    // Clean up any stale/duplicate player with the same username or socket in this room
+    for (const [existingId, p] of this.players.entries()) {
+      if (
+        p.username.trim().toLowerCase() === username.trim().toLowerCase() ||
+        p.socketId === socketId
+      ) {
+        this.clearBotTimer(existingId);
+        this.clearPlayerQuestionTimer(existingId);
+        this.players.delete(existingId);
+        break;
+      }
     }
 
     const player: PlayerState = {
@@ -143,7 +166,7 @@ export class Match {
       totalSubmissions: 0,
       correctSubmissions: 0,
       fastestAnswerMs: 999999,
-      currentQuestion: null,
+      currentQuestion: this.currentSharedQuestion,
       focusStatus: this.antiCheatEngine.createInitialPlayerStatus(),
     };
 
@@ -227,74 +250,111 @@ export class Match {
     this.callbacks.onMatchStarted(summary);
     this.callbacks.onLeaderboardUpdated(this.getLeaderboard());
 
-    // Assign initial question to all players
-    for (const player of this.players.values()) {
-      this.assignNextQuestion(player.id);
-    }
+    // Assign the shared initial question to all players simultaneously
+    this.assignSharedNextQuestion();
 
     return true;
   }
 
-  public assignNextQuestion(playerId: string): void {
-    const player = this.players.get(playerId);
-    if (!player || this.status !== 'in_progress' || player.focusStatus.isDisqualified) {
-      return;
+  public assignNextQuestion(_playerId?: string): void {
+    this.assignSharedNextQuestion();
+  }
+
+  public assignSharedNextQuestion(): void {
+    if (this.status !== 'in_progress') return;
+
+    if (this.sharedQuestionTimer) {
+      clearTimeout(this.sharedQuestionTimer);
+      this.sharedQuestionTimer = null;
+    }
+    if (this.sharedNextTransitionTimer) {
+      clearTimeout(this.sharedNextTransitionTimer);
+      this.sharedNextTransitionTimer = null;
     }
 
-    this.clearPlayerQuestionTimer(playerId);
-    this.clearBotTimer(playerId);
+    // Clear all bot timers
+    for (const timer of this.botTimers.values()) clearTimeout(timer);
+    this.botTimers.clear();
+
+    // Use current highest round among active players for question difficulty
+    let targetRound = 1;
+    for (const p of this.players.values()) {
+      if (!p.focusStatus.isDisqualified && p.currentRound > targetRound) {
+        targetRound = p.currentRound;
+      }
+    }
 
     const { instance, clientQuestion } = this.questionManager.createQuestionInstance(
       this.matchId,
-      playerId,
-      player.currentRound,
+      'shared',
+      targetRound,
       this.settings.questionTimeLimitSeconds
     );
 
-    player.currentQuestion = clientQuestion;
+    this.currentSharedQuestion = clientQuestion;
+    this.currentSharedInstanceId = instance.instanceId;
 
-    // Send question without answers to client
-    if (!player.isBot) {
-      this.callbacks.onQuestionAssigned(player.socketId, {
-        question: clientQuestion,
-        round: player.currentRound,
-        progress: player.roundCorrectAnswers,
-        required: getRequiredAnswersForRound(player.currentRound),
-      });
-    }
-
-    // Set question expiration timer
-    const timer = setTimeout(() => {
-      this.handleQuestionTimeout(playerId, instance.instanceId);
-    }, this.settings.questionTimeLimitSeconds * 1000);
-    this.questionTimers.set(playerId, timer);
-
-    // If bot, schedule bot answer
-    if (player.isBot) {
-      this.scheduleBotAnswer(player, instance.instanceId, instance.canonicalAnswer);
-    }
-  }
-
-  private handleQuestionTimeout(playerId: string, instanceId: string): void {
-    const player = this.players.get(playerId);
-    if (!player || this.status !== 'in_progress') return;
-
-    if (player.currentQuestion?.instanceId === instanceId) {
-      this.questionManager.expireInstance(instanceId);
+    // Assign identical question to all players simultaneously
+    for (const player of this.players.values()) {
+      if (player.focusStatus.isDisqualified) continue;
+      player.currentQuestion = clientQuestion;
 
       if (!player.isBot) {
+        this.callbacks.onQuestionAssigned(player.socketId, {
+          question: clientQuestion,
+          round: player.currentRound,
+          progress: player.roundCorrectAnswers,
+          required: getRequiredAnswersForRound(player.currentRound),
+        });
+      } else {
+        this.scheduleBotAnswer(player, instance.instanceId, instance.canonicalAnswer);
+      }
+    }
+
+    // Set shared question timer
+    this.sharedQuestionTimer = setTimeout(() => {
+      this.handleSharedQuestionTimeout(instance.instanceId);
+    }, this.settings.questionTimeLimitSeconds * 1000);
+  }
+
+  private handleSharedQuestionTimeout(instanceId: string): void {
+    if (this.status !== 'in_progress' || this.currentSharedInstanceId !== instanceId) return;
+
+    if (this.sharedQuestionTimer) {
+      clearTimeout(this.sharedQuestionTimer);
+      this.sharedQuestionTimer = null;
+    }
+
+    for (const timer of this.botTimers.values()) clearTimeout(timer);
+    this.botTimers.clear();
+
+    const instance = this.questionManager.getInstance(instanceId);
+    this.questionManager.expireInstance(instanceId);
+
+    // Notify all human players that time is up
+    for (const player of this.players.values()) {
+      if (!player.isBot && !player.focusStatus.isDisqualified) {
         this.callbacks.onAnswerResult(player.socketId, {
           correct: false,
           earnedPoint: false,
-          message: 'Time is up for this question!',
+          canonicalAnswer: instance?.canonicalAnswer,
+          message: 'Time is up! Moving to the next question...',
           totalScore: player.totalScore,
           roundProgress: player.roundCorrectAnswers,
           requiredForRound: getRequiredAnswersForRound(player.currentRound),
         });
       }
+    }
 
-      // Move on to next question
-      this.assignNextQuestion(playerId);
+    // Advance everyone together to next question
+    if (this.settings.isTestMode) {
+      this.assignSharedNextQuestion();
+    } else {
+      this.sharedNextTransitionTimer = setTimeout(() => {
+        if (this.status === 'in_progress') {
+          this.assignSharedNextQuestion();
+        }
+      }, 1000);
     }
   }
 
@@ -354,6 +414,14 @@ export class Match {
 
     // Answer was correct!
     if (evalResult.awardedPoint) {
+      // First player to answer correctly wins the point!
+      if (this.sharedQuestionTimer) {
+        clearTimeout(this.sharedQuestionTimer);
+        this.sharedQuestionTimer = null;
+      }
+      for (const timer of this.botTimers.values()) clearTimeout(timer);
+      this.botTimers.clear();
+
       player.correctSubmissions += 1;
       player.totalScore += 1;
       player.roundCorrectAnswers += 1;
@@ -387,28 +455,89 @@ export class Match {
         if (player.currentRound > this.settings.targetRound) {
           this.winnerPlayerId = player.id;
           this.winnerUsername = player.username;
+
+          // Notify winner
+          if (!player.isBot) {
+            this.callbacks.onAnswerResult(player.socketId, {
+              correct: true,
+              earnedPoint: true,
+              canonicalAnswer: evalResult.canonicalAnswer,
+              message: 'Correct! You won the match!',
+              roundAdvanced,
+              newRound: player.currentRound,
+              totalScore: player.totalScore,
+              roundProgress: player.roundCorrectAnswers,
+              requiredForRound: getRequiredAnswersForRound(player.currentRound),
+              winnerName: player.username,
+            });
+          }
+
+          // Notify all other players
+          for (const other of this.players.values()) {
+            if (other.id !== player.id && !other.isBot) {
+              this.callbacks.onAnswerResult(other.socketId, {
+                correct: false,
+                earnedPoint: false,
+                canonicalAnswer: evalResult.canonicalAnswer,
+                message: `${player.username} answered correctly first and won the match!`,
+                totalScore: other.totalScore,
+                roundProgress: other.roundCorrectAnswers,
+                requiredForRound: getRequiredAnswersForRound(other.currentRound),
+                winnerName: player.username,
+              });
+            }
+          }
+
+          this.callbacks.onLeaderboardUpdated(this.getLeaderboard());
           this.completeMatch();
           return { received: true, correct: true, earnedPoint: true };
         }
       }
 
-      // Notify player of success
-      this.callbacks.onAnswerResult(player.socketId, {
-        correct: true,
-        earnedPoint: true,
-        canonicalAnswer: evalResult.canonicalAnswer,
-        message: evalResult.message,
-        roundAdvanced,
-        newRound: player.currentRound,
-        totalScore: player.totalScore,
-        roundProgress: player.roundCorrectAnswers,
-        requiredForRound: getRequiredAnswersForRound(player.currentRound),
-      });
+      // Notify winning player
+      if (!player.isBot) {
+        this.callbacks.onAnswerResult(player.socketId, {
+          correct: true,
+          earnedPoint: true,
+          canonicalAnswer: evalResult.canonicalAnswer,
+          message: 'Correct! +1 Point',
+          roundAdvanced,
+          newRound: player.currentRound,
+          totalScore: player.totalScore,
+          roundProgress: player.roundCorrectAnswers,
+          requiredForRound: getRequiredAnswersForRound(player.currentRound),
+          winnerName: player.username,
+        });
+      }
+
+      // Notify all other players
+      for (const other of this.players.values()) {
+        if (other.id !== player.id && !other.isBot) {
+          this.callbacks.onAnswerResult(other.socketId, {
+            correct: false,
+            earnedPoint: false,
+            canonicalAnswer: evalResult.canonicalAnswer,
+            message: `${player.username} answered correctly first! (+1 Point)`,
+            totalScore: other.totalScore,
+            roundProgress: other.roundCorrectAnswers,
+            requiredForRound: getRequiredAnswersForRound(other.currentRound),
+            winnerName: player.username,
+          });
+        }
+      }
 
       this.callbacks.onLeaderboardUpdated(this.getLeaderboard());
 
-      // Assign next question immediately to this player
-      this.assignNextQuestion(playerId);
+      // Advance everyone to the next question
+      if (this.settings.isTestMode) {
+        this.assignSharedNextQuestion();
+      } else {
+        this.sharedNextTransitionTimer = setTimeout(() => {
+          if (this.status === 'in_progress') {
+            this.assignSharedNextQuestion();
+          }
+        }, 1000);
+      }
 
       return { received: true, correct: true, earnedPoint: true };
     } else {
@@ -644,6 +773,14 @@ export class Match {
   }
 
   public cleanup(): void {
+    if (this.sharedQuestionTimer) {
+      clearTimeout(this.sharedQuestionTimer);
+      this.sharedQuestionTimer = null;
+    }
+    if (this.sharedNextTransitionTimer) {
+      clearTimeout(this.sharedNextTransitionTimer);
+      this.sharedNextTransitionTimer = null;
+    }
     for (const timer of this.questionTimers.values()) clearTimeout(timer);
     this.questionTimers.clear();
     for (const timer of this.botTimers.values()) clearTimeout(timer);

@@ -84,28 +84,32 @@ export function App() {
     const onConnect = () => {
       setIsConnected(true);
 
-      // Check if URL has ?room= parameter
       const params = new URLSearchParams(window.location.search);
       const urlRoom = params.get('room');
       const savedToken = getSavedSessionToken();
 
-      if (savedToken) {
-        socket.emit('lobby:reconnect', { sessionToken: savedToken }, (res) => {
-          if (!res.success) {
-            clearSessionToken();
-            if (urlRoom && urlRoom.length === 6) {
-              socket.emit('lobby:join', { username, roomCode: urlRoom.toUpperCase() }, (jRes) => {
-                if (jRes.success && jRes.sessionToken) {
-                  saveSessionToken(jRes.sessionToken);
-                }
-              });
-            }
+      if (urlRoom && urlRoom.length === 6) {
+        socket.emit('lobby:join', { username, roomCode: urlRoom.toUpperCase() }, (jRes: any) => {
+          if (jRes.success) {
+            if (jRes.sessionToken) saveSessionToken(jRes.sessionToken);
+            if (jRes.playerId) setCurrentPlayerId(jRes.playerId);
+            if (jRes.match) setMatch(jRes.match);
+          } else if (savedToken) {
+            socket.emit('lobby:reconnect', { sessionToken: savedToken }, (rRes: any) => {
+              if (rRes.success && rRes.match) {
+                setMatch(rRes.match);
+              } else {
+                clearSessionToken();
+              }
+            });
           }
         });
-      } else if (urlRoom && urlRoom.length === 6) {
-        socket.emit('lobby:join', { username, roomCode: urlRoom.toUpperCase() }, (jRes) => {
-          if (jRes.success && jRes.sessionToken) {
-            saveSessionToken(jRes.sessionToken);
+      } else if (savedToken) {
+        socket.emit('lobby:reconnect', { sessionToken: savedToken }, (res: any) => {
+          if (!res.success) {
+            clearSessionToken();
+          } else if (res.match) {
+            setMatch(res.match);
           }
         });
       }
@@ -534,6 +538,7 @@ export function App() {
   const handleCreateRoom = useCallback(
     (isTestMode: boolean, targetRound: number) => {
       setErrorMessage(null);
+      clearSessionToken();
 
       if (isConnected && socket.connected) {
         setIsLoading(true);
@@ -541,16 +546,20 @@ export function App() {
         socket.emit(
           'lobby:create',
           { username, isPrivate: true, isTestMode, targetRound },
-          (res) => {
+          (res: any) => {
             setIsLoading(false);
-            if (res.success && res.sessionToken) {
-              saveSessionToken(res.sessionToken);
+            if (res.success && res.match) {
+              if (res.sessionToken) saveSessionToken(res.sessionToken);
+              if (res.playerId) setCurrentPlayerId(res.playerId);
+              setMatch(res.match);
               if (res.roomCode) {
-                // Update URL parameter and reload to guarantee clean redirect into the lobby
                 const url = new URL(window.location.href);
                 url.searchParams.set('room', res.roomCode);
-                window.location.href = url.toString();
+                window.history.replaceState({}, '', url.toString());
               }
+            } else if (res.success && res.roomCode) {
+              if (res.sessionToken) saveSessionToken(res.sessionToken);
+              createLocalRoom(isTestMode, targetRound, res.roomCode);
             } else {
               createLocalRoom(isTestMode, targetRound);
             }
@@ -568,26 +577,32 @@ export function App() {
   const handleJoinRoom = useCallback(
     (roomCode: string) => {
       setErrorMessage(null);
+      const cleanCode = roomCode.trim().toUpperCase();
 
       if (isConnected && socket.connected) {
         setIsLoading(true);
 
-        socket.emit('lobby:join', { username, roomCode }, (res) => {
+        socket.emit('lobby:join', { username, roomCode: cleanCode }, (res: any) => {
           setIsLoading(false);
-          if (res.success && res.sessionToken) {
-            saveSessionToken(res.sessionToken);
+          if (res.success && res.match) {
+            if (res.sessionToken) saveSessionToken(res.sessionToken);
+            if (res.playerId) setCurrentPlayerId(res.playerId);
+            setMatch(res.match);
             const url = new URL(window.location.href);
-            url.searchParams.set('room', roomCode);
-            window.location.href = url.toString();
+            url.searchParams.set('room', cleanCode);
+            window.history.replaceState({}, '', url.toString());
+          } else if (res.success && res.roomCode) {
+            if (res.sessionToken) saveSessionToken(res.sessionToken);
+            createLocalRoom(true, 5, cleanCode);
           } else {
-            createLocalRoom(true, 5, roomCode);
+            setErrorMessage(res?.error || 'Failed to join room');
           }
         });
         return;
       }
 
       // Offline / Instant
-      createLocalRoom(true, 5, roomCode);
+      createLocalRoom(true, 5, cleanCode);
     },
     [username, isConnected, createLocalRoom]
   );

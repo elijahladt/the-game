@@ -360,4 +360,79 @@ describe('QUICKFIRE Automated Verification Suite', () => {
     match.removePlayer('p1');
     expect(match.status).toBe('abandoned');
   });
+
+  // 18. Synchronous shared questions: Everyone receives the same question, first correct answer gets the point, and everyone moves on
+  it('Requirement 18: Synchronous shared questions - same question for all, first to answer gets point, all advance', () => {
+    const match = new Match(
+      'match-shared-sync',
+      'SYNC01',
+      'p1',
+      'Alice',
+      'sock-1',
+      true,
+      { isTestMode: true, targetRound: 5 },
+      qm,
+      matchCallbacks
+    );
+
+    match.addPlayer('p2', 'Bob', 'sock-2');
+    match.startMatch();
+
+    const summary1 = match.getSummary();
+    const qA = summary1.players['p1'].currentQuestion;
+    const qB = summary1.players['p2'].currentQuestion;
+
+    // Both players must receive the EXACT same question instance at the same time
+    expect(qA).toBeDefined();
+    expect(qB).toBeDefined();
+    expect(qA!.instanceId).toBe(qB!.instanceId);
+    expect(qA!.questionId).toBe(qB!.questionId);
+
+    const firstInstanceId = qA!.instanceId;
+    const qInstance = qm.getInstance(firstInstanceId)!;
+
+    // Alice answers first correctly
+    const resA = match.submitAnswer('p1', firstInstanceId, qInstance.canonicalAnswer);
+    expect(resA.correct).toBe(true);
+    expect(resA.earnedPoint).toBe(true);
+
+    const summary2 = match.getSummary();
+    expect(summary2.players['p1'].totalScore).toBe(1);
+    expect(summary2.players['p2'].totalScore).toBe(0);
+
+    // Both players have now moved on to the next shared question!
+    const nextQA = summary2.players['p1'].currentQuestion;
+    const nextQB = summary2.players['p2'].currentQuestion;
+    expect(nextQA).toBeDefined();
+    expect(nextQB).toBeDefined();
+    expect(nextQA!.instanceId).toBe(nextQB!.instanceId);
+    expect(nextQA!.instanceId).not.toBe(firstInstanceId);
+
+    // If Bob tries to answer the old question that already finished, Bob does not get the point
+    const resB = match.submitAnswer('p2', firstInstanceId, qInstance.canonicalAnswer);
+    expect(resB.received).toBe(true);
+    expect(resB.earnedPoint).toBe(false);
+  });
+
+  // 19. Duplicate profile prevention and stale room cleanup
+  it('Requirement 19: Creating a new match cleans up previous socket room and duplicate usernames', () => {
+    const mm = new MatchManager(
+      qm,
+      () => {},
+      () => {}
+    );
+
+    // Socket creates room 1
+    const { match: match1 } = mm.createMatch('Alice', 'sock-alice', true, true);
+    expect(mm.getMatchByCode(match1.roomCode)).toBeDefined();
+
+    // Socket accidentally creates room 2 - room 1 should be cleaned up
+    const { match: match2 } = mm.createMatch('Alice', 'sock-alice', true, true);
+    expect(mm.getMatchByCode(match2.roomCode)).toBeDefined();
+    expect(mm.getMatchByCode(match1.roomCode)).toBeUndefined();
+
+    // Joining with the same username in a room replaces the existing player instead of duplicating
+    match2.addPlayer('p-duplicate', 'Alice', 'sock-alice-new');
+    expect(match2.getPlayersCount()).toBe(1);
+  });
 });

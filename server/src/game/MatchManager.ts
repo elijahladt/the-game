@@ -50,6 +50,22 @@ export class MatchManager {
     return code;
   }
 
+  private cleanupSocketOldMatches(socketId: string): void {
+    const existing = this.socketToPlayer.get(socketId);
+    if (existing) {
+      const oldMatch = this.matches.get(existing.matchId);
+      if (oldMatch) {
+        oldMatch.removePlayer(existing.playerId);
+        if (oldMatch.getPlayersCount() === 0) {
+          oldMatch.cleanup();
+          this.matches.delete(oldMatch.matchId);
+          this.roomCodeToMatchId.delete(oldMatch.roomCode);
+        }
+      }
+      this.socketToPlayer.delete(socketId);
+    }
+  }
+
   public createMatch(
     hostUsername: string,
     hostSocketId: string,
@@ -57,6 +73,9 @@ export class MatchManager {
     isTestMode: boolean = false,
     settings: Partial<MatchSettings> = {}
   ): { match: Match; sessionToken: string; playerId: string } {
+    // Clean up any lingering match or profile for this socket
+    this.cleanupSocketOldMatches(hostSocketId);
+
     const matchId = randomUUID();
     const roomCode = this.generateRoomCode();
     const playerId = randomUUID();
@@ -123,6 +142,9 @@ export class MatchManager {
     socketId: string,
     roomCode?: string
   ): { success: boolean; match?: Match; sessionToken?: string; playerId?: string; error?: string } {
+    // Clean up any lingering match or profile for this socket
+    this.cleanupSocketOldMatches(socketId);
+
     let targetMatchId: string | undefined;
 
     if (roomCode) {

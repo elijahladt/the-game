@@ -189,8 +189,8 @@ export interface ServerToClientEvents {
 
 // Client to Server Events
 export interface ClientToServerEvents {
-  'lobby:create': (data: { username: string; isPrivate?: boolean; isTestMode?: boolean; targetRound?: number }, callback: (res: { success: boolean; roomCode?: string; matchId?: string; sessionToken?: string; error?: string }) => void) => void;
-  'lobby:join': (data: { username: string; roomCode?: string; quickPlay?: boolean }, callback: (res: { success: boolean; roomCode?: string; matchId?: string; sessionToken?: string; error?: string }) => void) => void;
+  'lobby:create': (data: { username: string; isPrivate?: boolean; isTestMode?: boolean; targetRound?: number }, callback: (res: { success: boolean; roomCode?: string; matchId?: string; sessionToken?: string; playerId?: string; match?: MatchSummary; error?: string }) => void) => void;
+  'lobby:join': (data: { username: string; roomCode?: string; quickPlay?: boolean }, callback: (res: { success: boolean; roomCode?: string; matchId?: string; sessionToken?: string; playerId?: string; match?: MatchSummary; error?: string }) => void) => void;
   'lobby:reconnect': (data: { sessionToken: string }, callback: (res: { success: boolean; match?: MatchSummary; error?: string }) => void) => void;
   'lobby:ready': (data: { isReady: boolean }) => void;
   'lobby:start': () => void;

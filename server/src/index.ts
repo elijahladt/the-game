@@ -91,6 +91,8 @@ io.on('connection', (socket) => {
           roomCode: match.roomCode,
           matchId: match.matchId,
           sessionToken,
+          playerId,
+          match: match.getSummary(),
         });
       }
     } catch (err: any) {
@@ -126,6 +128,8 @@ io.on('connection', (socket) => {
           roomCode: result.match.roomCode,
           matchId: result.match.matchId,
           sessionToken: result.sessionToken,
+          playerId: result.playerId,
+          match: result.match.getSummary(),
         });
       }
     } catch (err: any) {
