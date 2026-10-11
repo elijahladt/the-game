@@ -41,70 +41,29 @@ export interface LocalGameEvents {
 export class LocalGameEngine {
   private targetRound: number = 3;
   private timeLimitSeconds: number = 30;
-  private userPlayer: PlayerState;
-  private botPlayer: PlayerState;
+  private players: Record<string, PlayerState>;
+  private userId: string;
+  private roomCode: string;
   private currentQuestionItem: QuestionBankItem | null = null;
   private events: LocalGameEvents;
   private isCompleted: boolean = false;
   private startedAt: number = 0;
-  private botTimer: any = null;
+  private botTimers: any[] = [];
   private questionTimer: any = null;
   private usedQuestions: Set<string> = new Set();
 
-  constructor(username: string, targetRound: number = 3, events: LocalGameEvents) {
+  constructor(
+    players: Record<string, PlayerState>,
+    userId: string,
+    targetRound: number = 3,
+    roomCode: string = 'SOLO',
+    events: LocalGameEvents
+  ) {
+    this.players = { ...players };
+    this.userId = userId;
     this.targetRound = targetRound;
+    this.roomCode = roomCode;
     this.events = events;
-
-    this.userPlayer = {
-      id: 'local-user',
-      socketId: 'local-socket',
-      username,
-      avatarSeed: username.toLowerCase(),
-      isReady: true,
-      isHost: true,
-      isConnected: true,
-      currentRound: 1,
-      roundCorrectAnswers: 0,
-      totalScore: 0,
-      highestRound: 1,
-      totalSubmissions: 0,
-      correctSubmissions: 0,
-      fastestAnswerMs: 999999,
-      focusStatus: {
-        violationsCount: 0,
-        lastViolationTimestamp: 0,
-        isLockedOut: false,
-        lockedUntil: 0,
-        isDisqualified: false,
-        penaltyLog: [],
-      },
-    };
-
-    this.botPlayer = {
-      id: 'local-bot',
-      socketId: 'bot-socket',
-      username: 'PixelPro [AI]',
-      avatarSeed: 'pixelpro',
-      isReady: true,
-      isHost: false,
-      isConnected: true,
-      isBot: true,
-      currentRound: 1,
-      roundCorrectAnswers: 0,
-      totalScore: 0,
-      highestRound: 1,
-      totalSubmissions: 0,
-      correctSubmissions: 0,
-      fastestAnswerMs: 999999,
-      focusStatus: {
-        violationsCount: 0,
-        lastViolationTimestamp: 0,
-        isLockedOut: false,
-        lockedUntil: 0,
-        isDisqualified: false,
-        penaltyLog: [],
-      },
-    };
   }
 
   public start(): MatchSummary {
@@ -112,6 +71,10 @@ export class LocalGameEngine {
     this.assignNextQuestion();
     this.emitLeaderboard();
     return this.getSummary();
+  }
+
+  private getUserPlayer(): PlayerState {
+    return this.players[this.userId];
   }
 
   private pickQuestion(round: number): QuestionBankItem {
@@ -132,9 +95,12 @@ export class LocalGameEngine {
   private assignNextQuestion(): void {
     if (this.isCompleted) return;
     clearTimeout(this.questionTimer);
-    clearTimeout(this.botTimer);
+    this.clearBotTimers();
 
-    const qItem = this.pickQuestion(this.userPlayer.currentRound);
+    const user = this.getUserPlayer();
+    if (!user) return;
+
+    const qItem = this.pickQuestion(user.currentRound);
     this.currentQuestionItem = qItem;
 
     const now = Date.now();
@@ -153,13 +119,13 @@ export class LocalGameEngine {
       expiresAt,
     };
 
-    this.userPlayer.currentQuestion = clientQ;
+    user.currentQuestion = clientQ;
 
     this.events.onQuestionAssigned({
       question: clientQ,
-      round: this.userPlayer.currentRound,
-      progress: this.userPlayer.roundCorrectAnswers,
-      required: getRequiredAnswersForRound(this.userPlayer.currentRound),
+      round: user.currentRound,
+      progress: user.roundCorrectAnswers,
+      required: getRequiredAnswersForRound(user.currentRound),
     });
 
     // Timeout
@@ -169,42 +135,58 @@ export class LocalGameEngine {
         correct: false,
         earnedPoint: false,
         message: 'Time is up! Moving to next question...',
-        totalScore: this.userPlayer.totalScore,
-        roundProgress: this.userPlayer.roundCorrectAnswers,
-        requiredForRound: getRequiredAnswersForRound(this.userPlayer.currentRound),
+        totalScore: user.totalScore,
+        roundProgress: user.roundCorrectAnswers,
+        requiredForRound: getRequiredAnswersForRound(user.currentRound),
       });
       this.assignNextQuestion();
     }, this.timeLimitSeconds * 1000);
 
-    // Bot autonomous simulation
-    this.scheduleBot();
+    // Schedule bots
+    this.scheduleBots();
   }
 
-  private scheduleBot(): void {
-    const thinkTime = 5000 + Math.random() * 6000;
-    this.botTimer = setTimeout(() => {
-      if (this.isCompleted) return;
-      // Bot has a 65% chance of getting a correct answer
-      if (Math.random() < 0.65) {
-        this.botPlayer.roundCorrectAnswers += 1;
-        this.botPlayer.totalScore += 1;
-        const required = getRequiredAnswersForRound(this.botPlayer.currentRound);
-        if (this.botPlayer.roundCorrectAnswers >= required) {
-          this.botPlayer.currentRound += 1;
-          this.botPlayer.roundCorrectAnswers = 0;
-          if (this.botPlayer.currentRound > this.targetRound) {
-            this.finishMatch(this.botPlayer.id, this.botPlayer.username);
-            return;
+  private clearBotTimers(): void {
+    this.botTimers.forEach((t) => clearTimeout(t));
+    this.botTimers = [];
+  }
+
+  private scheduleBots(): void {
+    for (const player of Object.values(this.players)) {
+      if (!player.isBot) continue;
+
+      const thinkTime = 5000 + Math.random() * 6000;
+      const timer = setTimeout(() => {
+        if (this.isCompleted) return;
+        // Bot has 60% accuracy
+        if (Math.random() < 0.6) {
+          player.roundCorrectAnswers += 1;
+          player.totalScore += 1;
+          const required = getRequiredAnswersForRound(player.currentRound);
+          if (player.roundCorrectAnswers >= required) {
+            player.currentRound += 1;
+            player.roundCorrectAnswers = 0;
+            if (player.currentRound > this.targetRound) {
+              this.finishMatch(player.id, player.username);
+              return;
+            }
           }
+          this.emitLeaderboard();
         }
-        this.emitLeaderboard();
-      }
-    }, thinkTime);
+      }, thinkTime);
+
+      this.botTimers.push(timer);
+    }
   }
 
   public submitAnswer(answer: string): { correct: boolean; earnedPoint: boolean; message: string } {
     if (this.isCompleted || !this.currentQuestionItem) {
       return { correct: false, earnedPoint: false, message: 'Question inactive' };
+    }
+
+    const user = this.getUserPlayer();
+    if (!user) {
+      return { correct: false, earnedPoint: false, message: 'Player error' };
     }
 
     const correct = isAnswerCorrect(
@@ -218,28 +200,28 @@ export class LocalGameEngine {
         correct: false,
         earnedPoint: false,
         message: 'Incorrect answer. Try again!',
-        totalScore: this.userPlayer.totalScore,
-        roundProgress: this.userPlayer.roundCorrectAnswers,
-        requiredForRound: getRequiredAnswersForRound(this.userPlayer.currentRound),
+        totalScore: user.totalScore,
+        roundProgress: user.roundCorrectAnswers,
+        requiredForRound: getRequiredAnswersForRound(user.currentRound),
       });
       return { correct: false, earnedPoint: false, message: 'Incorrect answer. Try again!' };
     }
 
     // Correct!
-    this.userPlayer.correctSubmissions += 1;
-    this.userPlayer.totalScore += 1;
-    this.userPlayer.roundCorrectAnswers += 1;
+    user.correctSubmissions += 1;
+    user.totalScore += 1;
+    user.roundCorrectAnswers += 1;
 
-    const required = getRequiredAnswersForRound(this.userPlayer.currentRound);
+    const required = getRequiredAnswersForRound(user.currentRound);
     let roundAdvanced = false;
 
-    if (this.userPlayer.roundCorrectAnswers >= required) {
-      this.userPlayer.currentRound += 1;
-      this.userPlayer.roundCorrectAnswers = 0;
+    if (user.roundCorrectAnswers >= required) {
+      user.currentRound += 1;
+      user.roundCorrectAnswers = 0;
       roundAdvanced = true;
 
-      if (this.userPlayer.currentRound > this.targetRound) {
-        this.finishMatch(this.userPlayer.id, this.userPlayer.username);
+      if (user.currentRound > this.targetRound) {
+        this.finishMatch(user.id, user.username);
         return { correct: true, earnedPoint: true, message: 'Victory! You won the match!' };
       }
     }
@@ -250,10 +232,10 @@ export class LocalGameEngine {
       canonicalAnswer: this.currentQuestionItem.canonical_answer,
       message: 'Correct! +1 Point',
       roundAdvanced,
-      newRound: this.userPlayer.currentRound,
-      totalScore: this.userPlayer.totalScore,
-      roundProgress: this.userPlayer.roundCorrectAnswers,
-      requiredForRound: getRequiredAnswersForRound(this.userPlayer.currentRound),
+      newRound: user.currentRound,
+      totalScore: user.totalScore,
+      roundProgress: user.roundCorrectAnswers,
+      requiredForRound: getRequiredAnswersForRound(user.currentRound),
     });
 
     this.emitLeaderboard();
@@ -266,10 +248,10 @@ export class LocalGameEngine {
     if (this.isCompleted) return;
     this.isCompleted = true;
     clearTimeout(this.questionTimer);
-    clearTimeout(this.botTimer);
+    this.clearBotTimers();
 
     const durationSeconds = Math.floor((Date.now() - this.startedAt) / 1000);
-    const totalAnswered = this.userPlayer.correctSubmissions + this.botPlayer.correctSubmissions;
+    const totalAnswered = Object.values(this.players).reduce((acc, p) => acc + p.correctSubmissions, 0);
 
     this.events.onMatchCompleted({
       winnerId,
@@ -283,7 +265,7 @@ export class LocalGameEngine {
   }
 
   public getLeaderboard(winnerId?: string): LeaderboardEntry[] {
-    const list = [this.userPlayer, this.botPlayer].map((p) => ({
+    const list = Object.values(this.players).map((p) => ({
       playerId: p.id,
       username: p.username,
       totalScore: p.totalScore,
@@ -312,8 +294,8 @@ export class LocalGameEngine {
 
   public getSummary(): MatchSummary {
     return {
-      matchId: 'local-match',
-      roomCode: 'SOLO',
+      matchId: `local-${this.startedAt}`,
+      roomCode: this.roomCode,
       isPrivate: true,
       status: this.isCompleted ? 'completed' : 'in_progress',
       winnerPlayerId: null,
@@ -322,22 +304,19 @@ export class LocalGameEngine {
         targetRound: this.targetRound,
         questionTimeLimitSeconds: this.timeLimitSeconds,
         minPlayersToStart: 1,
-        maxPlayers: 2,
+        maxPlayers: 12,
         antiCheatEnabled: false,
         isTestMode: true,
       },
       startedAt: this.startedAt,
       endedAt: null,
-      players: {
-        [this.userPlayer.id]: this.userPlayer,
-        [this.botPlayer.id]: this.botPlayer,
-      },
+      players: this.players,
     };
   }
 
   public cleanup(): void {
     this.isCompleted = true;
     clearTimeout(this.questionTimer);
-    clearTimeout(this.botTimer);
+    this.clearBotTimers();
   }
 }

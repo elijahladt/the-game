@@ -3,6 +3,7 @@ import type {
   MatchSummary,
   ClientQuestion,
   LeaderboardEntry,
+  PlayerState,
   FocusPenaltyTier,
 } from '@quickfire/shared';
 import {
@@ -293,80 +294,361 @@ export function App() {
     };
   }, [match?.status, activeQuestion, isDisqualified]);
 
-  // Lobby & Action Handlers
-  const handleQuickPlay = useCallback(() => {
-    setIsLoading(true);
-    setErrorMessage(null);
+  const localEngineRef = useRef<LocalGameEngine | null>(null);
 
-    socket.emit('lobby:join', { username, quickPlay: true }, (res) => {
+  // Helper to create and enter a local lobby instantly
+  const createLocalRoom = useCallback(
+    (isTestMode: boolean = true, targetRound: number = 5, code?: string) => {
       setIsLoading(false);
-      if (res.success && res.sessionToken) {
-        saveSessionToken(res.sessionToken);
-      } else {
-        setErrorMessage(res.error || 'Failed to join match');
-      }
-    });
-  }, [username]);
-
-  const handleCreateRoom = useCallback(
-    (isTestMode: boolean, targetRound: number) => {
-      setIsLoading(true);
       setErrorMessage(null);
+      const roomCode = code || Math.random().toString(36).substring(2, 8).toUpperCase();
+      const myId = 'local-user';
+      setCurrentPlayerId(myId);
 
-      socket.emit(
-        'lobby:create',
-        { username, isPrivate: true, isTestMode, targetRound },
-        (res) => {
-          setIsLoading(false);
-          if (res.success && res.sessionToken) {
-            saveSessionToken(res.sessionToken);
-          } else {
-            setErrorMessage(res.error || 'Failed to create room');
-          }
-        }
-      );
+      const userPlayer: PlayerState = {
+        id: myId,
+        socketId: 'local-sock',
+        username,
+        avatarSeed: username.toLowerCase(),
+        isReady: true,
+        isHost: true,
+        isConnected: true,
+        currentRound: 1,
+        roundCorrectAnswers: 0,
+        totalScore: 0,
+        highestRound: 1,
+        totalSubmissions: 0,
+        correctSubmissions: 0,
+        fastestAnswerMs: 999999,
+        focusStatus: {
+          violationsCount: 0,
+          lastViolationTimestamp: 0,
+          isLockedOut: false,
+          lockedUntil: 0,
+          isDisqualified: false,
+          penaltyLog: [],
+        },
+      };
+
+      const localMatch: MatchSummary = {
+        matchId: `local-${Date.now()}`,
+        roomCode,
+        isPrivate: true,
+        status: 'waiting',
+        winnerPlayerId: null,
+        winnerUsername: null,
+        settings: {
+          targetRound,
+          questionTimeLimitSeconds: 30,
+          minPlayersToStart: 1,
+          maxPlayers: 12,
+          antiCheatEnabled: true,
+          isTestMode,
+        },
+        players: {
+          [myId]: userPlayer,
+        },
+      };
+
+      setMatch(localMatch);
     },
     [username]
   );
 
-  const handleJoinRoom = useCallback(
-    (roomCode: string) => {
-      setIsLoading(true);
-      setErrorMessage(null);
+  // Lobby & Action Handlers
+  const handleQuickPlay = useCallback(() => {
+    setErrorMessage(null);
 
-      socket.emit('lobby:join', { username, roomCode }, (res) => {
+    if (isConnected) {
+      setIsLoading(true);
+      let resolved = false;
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          setIsLoading(false);
+          handleStartSolo();
+        }
+      }, 2000);
+
+      socket.emit('lobby:join', { username, quickPlay: true }, (res) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
         setIsLoading(false);
         if (res.success && res.sessionToken) {
           saveSessionToken(res.sessionToken);
         } else {
-          setErrorMessage(res.error || 'Failed to join room');
+          handleStartSolo();
         }
       });
+      return;
+    }
+
+    // Offline / Instant
+    handleStartSolo();
+  }, [username, isConnected]);
+
+  const handleCreateRoom = useCallback(
+    (isTestMode: boolean, targetRound: number) => {
+      setErrorMessage(null);
+
+      if (isConnected) {
+        setIsLoading(true);
+        let resolved = false;
+        const timer = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            setIsLoading(false);
+            createLocalRoom(isTestMode, targetRound);
+          }
+        }, 2000);
+
+        socket.emit(
+          'lobby:create',
+          { username, isPrivate: true, isTestMode, targetRound },
+          (res) => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timer);
+            setIsLoading(false);
+            if (res.success && res.sessionToken) {
+              saveSessionToken(res.sessionToken);
+            } else {
+              createLocalRoom(isTestMode, targetRound);
+            }
+          }
+        );
+        return;
+      }
+
+      // Offline / Instant
+      createLocalRoom(isTestMode, targetRound);
     },
-    [username]
+    [username, isConnected, createLocalRoom]
+  );
+
+  const handleJoinRoom = useCallback(
+    (roomCode: string) => {
+      setErrorMessage(null);
+
+      if (isConnected) {
+        setIsLoading(true);
+        let resolved = false;
+        const timer = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            setIsLoading(false);
+            createLocalRoom(true, 5, roomCode);
+          }
+        }, 2000);
+
+        socket.emit('lobby:join', { username, roomCode }, (res) => {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(timer);
+          setIsLoading(false);
+          if (res.success && res.sessionToken) {
+            saveSessionToken(res.sessionToken);
+          } else {
+            createLocalRoom(true, 5, roomCode);
+          }
+        });
+        return;
+      }
+
+      // Offline / Instant
+      createLocalRoom(true, 5, roomCode);
+    },
+    [username, isConnected, createLocalRoom]
   );
 
   const handleToggleReady = useCallback((ready: boolean) => {
+    if (match && match.matchId.startsWith('local-')) {
+      setMatch((prev) => {
+        if (!prev) return null;
+        const p = prev.players['local-user'];
+        if (p) p.isReady = ready;
+        return { ...prev };
+      });
+      return;
+    }
     socket.emit('lobby:ready', { isReady: ready });
-  }, []);
+  }, [match]);
 
   const handleStartMatch = useCallback(() => {
+    if (match && match.matchId.startsWith('local-')) {
+      const engine = new LocalGameEngine(
+        match.players,
+        currentPlayerId || 'local-user',
+        match.settings.targetRound,
+        match.roomCode,
+        {
+          onQuestionAssigned: (data) => {
+            setActiveQuestion(data.question);
+            setRound(data.round);
+            setRoundProgress(data.progress);
+            setRequiredForRound(data.required);
+            setAnswerFeedback({ status: 'idle', message: '' });
+          },
+          onAnswerResult: (data) => {
+            setTotalScore(data.totalScore);
+            setRoundProgress(data.roundProgress);
+            setRequiredForRound(data.requiredForRound);
+
+            if (data.correct) {
+              sound.playCorrect();
+              setAnswerFeedback({
+                status: 'correct',
+                message: data.earnedPoint ? 'Correct! +1 Point' : 'Correct!',
+                earnedPoint: data.earnedPoint,
+                canonical: data.canonicalAnswer,
+              });
+            } else {
+              sound.playIncorrect();
+              setAnswerFeedback({
+                status: 'incorrect',
+                message: data.message,
+              });
+            }
+
+            if (data.roundAdvanced) {
+              sound.playRoundUp();
+              if (data.newRound) setRound(data.newRound);
+            }
+          },
+          onLeaderboardUpdated: (board) => {
+            setLeaderboard(board);
+          },
+          onMatchCompleted: (data) => {
+            setWinnerInfo({ id: data.winnerId, name: data.winnerName });
+            setLeaderboard(data.finalLeaderboard);
+            setMatchStats(data.matchStats);
+          },
+        }
+      );
+
+      localEngineRef.current = engine;
+      const started = engine.start();
+      setMatch(started);
+      return;
+    }
+
     socket.emit('lobby:start');
-  }, []);
+  }, [match, currentPlayerId]);
 
   const handleAddBot = useCallback(() => {
-    socket.emit('lobby:add_bot');
-  }, []);
+    if (match && match.matchId.startsWith('local-')) {
+      const currentBots = Object.values(match.players).filter((p) => p.isBot).length;
+      const botNames = ['PixelPro [AI]', 'TriviaBot [AI]', 'BrainyNova [AI]', 'SpeedyFox [AI]'];
+      const botName = botNames[currentBots % botNames.length];
+      const botId = `bot-${Date.now()}`;
 
-  const localEngineRef = useRef<LocalGameEngine | null>(null);
+      const botPlayer: PlayerState = {
+        id: botId,
+        socketId: `sock-${botId}`,
+        username: botName,
+        avatarSeed: botName.toLowerCase(),
+        isReady: true,
+        isHost: false,
+        isConnected: true,
+        isBot: true,
+        currentRound: 1,
+        roundCorrectAnswers: 0,
+        totalScore: 0,
+        highestRound: 1,
+        totalSubmissions: 0,
+        correctSubmissions: 0,
+        fastestAnswerMs: 999999,
+        focusStatus: {
+          violationsCount: 0,
+          lastViolationTimestamp: 0,
+          isLockedOut: false,
+          lockedUntil: 0,
+          isDisqualified: false,
+          penaltyLog: [],
+        },
+      };
+
+      setMatch((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          players: {
+            ...prev.players,
+            [botId]: botPlayer,
+          },
+        };
+      });
+      return;
+    }
+
+    socket.emit('lobby:add_bot');
+  }, [match]);
 
   const handleStartSolo = useCallback(() => {
     setIsLoading(false);
     setErrorMessage(null);
     setWinnerInfo(null);
-    setCurrentPlayerId('local-user');
+    const myId = 'local-user';
+    setCurrentPlayerId(myId);
 
-    const engine = new LocalGameEngine(username, 3, {
+    const userPlayer: PlayerState = {
+      id: myId,
+      socketId: 'local-socket',
+      username,
+      avatarSeed: username.toLowerCase(),
+      isReady: true,
+      isHost: true,
+      isConnected: true,
+      currentRound: 1,
+      roundCorrectAnswers: 0,
+      totalScore: 0,
+      highestRound: 1,
+      totalSubmissions: 0,
+      correctSubmissions: 0,
+      fastestAnswerMs: 999999,
+      focusStatus: {
+        violationsCount: 0,
+        lastViolationTimestamp: 0,
+        isLockedOut: false,
+        lockedUntil: 0,
+        isDisqualified: false,
+        penaltyLog: [],
+      },
+    };
+
+    const botPlayer: PlayerState = {
+      id: 'bot-1',
+      socketId: 'sock-bot-1',
+      username: 'PixelPro [AI]',
+      avatarSeed: 'pixelpro',
+      isReady: true,
+      isHost: false,
+      isConnected: true,
+      isBot: true,
+      currentRound: 1,
+      roundCorrectAnswers: 0,
+      totalScore: 0,
+      highestRound: 1,
+      totalSubmissions: 0,
+      correctSubmissions: 0,
+      fastestAnswerMs: 999999,
+      focusStatus: {
+        violationsCount: 0,
+        lastViolationTimestamp: 0,
+        isLockedOut: false,
+        lockedUntil: 0,
+        isDisqualified: false,
+        penaltyLog: [],
+      },
+    };
+
+    const playersMap = {
+      [myId]: userPlayer,
+      'bot-1': botPlayer,
+    };
+
+    const engine = new LocalGameEngine(playersMap, myId, 3, 'SOLO', {
       onQuestionAssigned: (data) => {
         setActiveQuestion(data.question);
         setRound(data.round);
