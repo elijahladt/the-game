@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
-import { Play, PlusCircle, LogIn, Sparkles, Zap, ShieldCheck, Trophy, Layers, Bot } from 'lucide-react';
+import { Play, PlusCircle, LogIn, Sparkles, Zap, ShieldCheck, Trophy, Layers } from 'lucide-react';
 
 interface HomeScreenProps {
   username: string;
   onUsernameChange: (name: string) => void;
   onQuickPlay: () => void;
-  onStartSolo: () => void;
   onCreateRoom: (isTestMode: boolean, targetRound: number) => void;
   onJoinRoom: (roomCode: string) => void;
   onOpenRules: () => void;
-  isConnected: boolean;
   isLoading: boolean;
   errorMessage: string | null;
 }
@@ -18,11 +16,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   username,
   onUsernameChange,
   onQuickPlay,
-  onStartSolo,
   onCreateRoom,
   onJoinRoom,
   onOpenRules,
-  isConnected,
   isLoading,
   errorMessage,
 }) => {
@@ -99,29 +95,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             )}
           </div>
 
-          {/* Quick Play CTA */}
+          {/* Main Quick Play CTA */}
           <button
             onClick={onQuickPlay}
-            disabled={!isNameValid || isLoading || !isConnected}
-            className={`w-full py-3.5 px-4 font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 transition transform active:scale-98 ${
-              isConnected
-                ? 'bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-indigo-600/30'
-                : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-            }`}
+            disabled={!isNameValid || isLoading}
+            className="w-full py-4 px-4 bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-lg rounded-xl shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2.5 transition transform active:scale-98 tracking-wide"
           >
-            <Play className="w-5 h-5 fill-current" />
-            <span>{isLoading ? 'Connecting...' : isConnected ? 'QUICK PLAY (MULTIPLAYER)' : 'MULTIPLAYER (BACKEND OFFLINE)'}</span>
-          </button>
-
-          {/* Instant Solo Practice Mode CTA */}
-          <button
-            type="button"
-            onClick={onStartSolo}
-            disabled={!isNameValid}
-            className="w-full py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 transition transform active:scale-98 text-sm"
-          >
-            <Bot className="w-4 h-4 text-emerald-200" />
-            <span>PLAY SOLO PRACTICE (INSTANT)</span>
+            <Play className="w-6 h-6 fill-white" />
+            <span>{isLoading ? 'Starting...' : 'QUICK PLAY'}</span>
           </button>
 
           <div className="relative flex py-1 items-center">

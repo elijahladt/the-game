@@ -766,11 +766,9 @@ export function App() {
             username={username}
             onUsernameChange={handleUsernameChange}
             onQuickPlay={handleQuickPlay}
-            onStartSolo={handleStartSolo}
             onCreateRoom={handleCreateRoom}
             onJoinRoom={handleJoinRoom}
             onOpenRules={() => setShowRules(true)}
-            isConnected={isConnected}
             isLoading={isLoading}
             errorMessage={errorMessage}
           />
