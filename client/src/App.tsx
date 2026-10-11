@@ -11,6 +11,7 @@ import {
   saveSessionToken,
   getSavedSessionToken,
   clearSessionToken,
+  resolveServerUrl,
 } from './services/socket';
 import { LocalGameEngine } from './services/localGame';
 import { sound } from './utils/sound';
@@ -73,7 +74,12 @@ export function App() {
 
   // Socket setup and listeners
   useEffect(() => {
-    socket.connect();
+    const url = resolveServerUrl();
+    if (url) {
+      socket.connect();
+    } else {
+      setIsConnected(false);
+    }
 
     const onConnect = () => {
       setIsConnected(true);
@@ -355,11 +361,123 @@ export function App() {
     [username]
   );
 
+  const handleStartSolo = useCallback(() => {
+    setIsLoading(false);
+    setErrorMessage(null);
+    setWinnerInfo(null);
+    const myId = 'local-user';
+    setCurrentPlayerId(myId);
+
+    const userPlayer: PlayerState = {
+      id: myId,
+      socketId: 'local-socket',
+      username,
+      avatarSeed: username.toLowerCase(),
+      isReady: true,
+      isHost: true,
+      isConnected: true,
+      currentRound: 1,
+      roundCorrectAnswers: 0,
+      totalScore: 0,
+      highestRound: 1,
+      totalSubmissions: 0,
+      correctSubmissions: 0,
+      fastestAnswerMs: 999999,
+      focusStatus: {
+        violationsCount: 0,
+        lastViolationTimestamp: 0,
+        isLockedOut: false,
+        lockedUntil: 0,
+        isDisqualified: false,
+        penaltyLog: [],
+      },
+    };
+
+    const botPlayer: PlayerState = {
+      id: 'bot-1',
+      socketId: 'sock-bot-1',
+      username: 'PixelPro [AI]',
+      avatarSeed: 'pixelpro',
+      isReady: true,
+      isHost: false,
+      isConnected: true,
+      isBot: true,
+      currentRound: 1,
+      roundCorrectAnswers: 0,
+      totalScore: 0,
+      highestRound: 1,
+      totalSubmissions: 0,
+      correctSubmissions: 0,
+      fastestAnswerMs: 999999,
+      focusStatus: {
+        violationsCount: 0,
+        lastViolationTimestamp: 0,
+        isLockedOut: false,
+        lockedUntil: 0,
+        isDisqualified: false,
+        penaltyLog: [],
+      },
+    };
+
+    const playersMap = {
+      [myId]: userPlayer,
+      'bot-1': botPlayer,
+    };
+
+    const engine = new LocalGameEngine(playersMap, myId, 3, 'SOLO', {
+      onQuestionAssigned: (data) => {
+        setActiveQuestion(data.question);
+        setRound(data.round);
+        setRoundProgress(data.progress);
+        setRequiredForRound(data.required);
+        setAnswerFeedback({ status: 'idle', message: '' });
+      },
+      onAnswerResult: (data) => {
+        setTotalScore(data.totalScore);
+        setRoundProgress(data.roundProgress);
+        setRequiredForRound(data.requiredForRound);
+
+        if (data.correct) {
+          sound.playCorrect();
+          setAnswerFeedback({
+            status: 'correct',
+            message: data.earnedPoint ? 'Correct! +1 Point' : 'Correct!',
+            earnedPoint: data.earnedPoint,
+            canonical: data.canonicalAnswer,
+          });
+        } else {
+          sound.playIncorrect();
+          setAnswerFeedback({
+            status: 'incorrect',
+            message: data.message,
+          });
+        }
+
+        if (data.roundAdvanced) {
+          sound.playRoundUp();
+          if (data.newRound) setRound(data.newRound);
+        }
+      },
+      onLeaderboardUpdated: (board) => {
+        setLeaderboard(board);
+      },
+      onMatchCompleted: (data) => {
+        setWinnerInfo({ id: data.winnerId, name: data.winnerName });
+        setLeaderboard(data.finalLeaderboard);
+        setMatchStats(data.matchStats);
+      },
+    });
+
+    localEngineRef.current = engine;
+    const summary = engine.start();
+    setMatch(summary);
+  }, [username]);
+
   // Lobby & Action Handlers
   const handleQuickPlay = useCallback(() => {
     setErrorMessage(null);
 
-    if (isConnected) {
+    if (isConnected && socket.connected) {
       setIsLoading(true);
       let resolved = false;
       const timer = setTimeout(() => {
@@ -368,7 +486,7 @@ export function App() {
           setIsLoading(false);
           handleStartSolo();
         }
-      }, 2000);
+      }, 1500);
 
       socket.emit('lobby:join', { username, quickPlay: true }, (res) => {
         if (resolved) return;
@@ -386,13 +504,13 @@ export function App() {
 
     // Offline / Instant
     handleStartSolo();
-  }, [username, isConnected]);
+  }, [username, isConnected, handleStartSolo]);
 
   const handleCreateRoom = useCallback(
     (isTestMode: boolean, targetRound: number) => {
       setErrorMessage(null);
 
-      if (isConnected) {
+      if (isConnected && socket.connected) {
         setIsLoading(true);
         let resolved = false;
         const timer = setTimeout(() => {
@@ -401,7 +519,7 @@ export function App() {
             setIsLoading(false);
             createLocalRoom(isTestMode, targetRound);
           }
-        }, 2000);
+        }, 1500);
 
         socket.emit(
           'lobby:create',
@@ -431,7 +549,7 @@ export function App() {
     (roomCode: string) => {
       setErrorMessage(null);
 
-      if (isConnected) {
+      if (isConnected && socket.connected) {
         setIsLoading(true);
         let resolved = false;
         const timer = setTimeout(() => {
@@ -440,7 +558,7 @@ export function App() {
             setIsLoading(false);
             createLocalRoom(true, 5, roomCode);
           }
-        }, 2000);
+        }, 1500);
 
         socket.emit('lobby:join', { username, roomCode }, (res) => {
           if (resolved) return;
@@ -584,118 +702,6 @@ export function App() {
 
     socket.emit('lobby:add_bot');
   }, [match]);
-
-  const handleStartSolo = useCallback(() => {
-    setIsLoading(false);
-    setErrorMessage(null);
-    setWinnerInfo(null);
-    const myId = 'local-user';
-    setCurrentPlayerId(myId);
-
-    const userPlayer: PlayerState = {
-      id: myId,
-      socketId: 'local-socket',
-      username,
-      avatarSeed: username.toLowerCase(),
-      isReady: true,
-      isHost: true,
-      isConnected: true,
-      currentRound: 1,
-      roundCorrectAnswers: 0,
-      totalScore: 0,
-      highestRound: 1,
-      totalSubmissions: 0,
-      correctSubmissions: 0,
-      fastestAnswerMs: 999999,
-      focusStatus: {
-        violationsCount: 0,
-        lastViolationTimestamp: 0,
-        isLockedOut: false,
-        lockedUntil: 0,
-        isDisqualified: false,
-        penaltyLog: [],
-      },
-    };
-
-    const botPlayer: PlayerState = {
-      id: 'bot-1',
-      socketId: 'sock-bot-1',
-      username: 'PixelPro [AI]',
-      avatarSeed: 'pixelpro',
-      isReady: true,
-      isHost: false,
-      isConnected: true,
-      isBot: true,
-      currentRound: 1,
-      roundCorrectAnswers: 0,
-      totalScore: 0,
-      highestRound: 1,
-      totalSubmissions: 0,
-      correctSubmissions: 0,
-      fastestAnswerMs: 999999,
-      focusStatus: {
-        violationsCount: 0,
-        lastViolationTimestamp: 0,
-        isLockedOut: false,
-        lockedUntil: 0,
-        isDisqualified: false,
-        penaltyLog: [],
-      },
-    };
-
-    const playersMap = {
-      [myId]: userPlayer,
-      'bot-1': botPlayer,
-    };
-
-    const engine = new LocalGameEngine(playersMap, myId, 3, 'SOLO', {
-      onQuestionAssigned: (data) => {
-        setActiveQuestion(data.question);
-        setRound(data.round);
-        setRoundProgress(data.progress);
-        setRequiredForRound(data.required);
-        setAnswerFeedback({ status: 'idle', message: '' });
-      },
-      onAnswerResult: (data) => {
-        setTotalScore(data.totalScore);
-        setRoundProgress(data.roundProgress);
-        setRequiredForRound(data.requiredForRound);
-
-        if (data.correct) {
-          sound.playCorrect();
-          setAnswerFeedback({
-            status: 'correct',
-            message: data.earnedPoint ? 'Correct! +1 Point' : 'Correct!',
-            earnedPoint: data.earnedPoint,
-            canonical: data.canonicalAnswer,
-          });
-        } else {
-          sound.playIncorrect();
-          setAnswerFeedback({
-            status: 'incorrect',
-            message: data.message,
-          });
-        }
-
-        if (data.roundAdvanced) {
-          sound.playRoundUp();
-          if (data.newRound) setRound(data.newRound);
-        }
-      },
-      onLeaderboardUpdated: (board) => {
-        setLeaderboard(board);
-      },
-      onMatchCompleted: (data) => {
-        setWinnerInfo({ id: data.winnerId, name: data.winnerName });
-        setLeaderboard(data.finalLeaderboard);
-        setMatchStats(data.matchStats);
-      },
-    });
-
-    localEngineRef.current = engine;
-    const summary = engine.start();
-    setMatch(summary);
-  }, [username]);
 
   const handleLeaveLobby = useCallback(() => {
     if (localEngineRef.current) {

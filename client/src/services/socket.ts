@@ -4,6 +4,14 @@ import type { ClientToServerEvents, ServerToClientEvents } from '@quickfire/shar
 export const SESSION_STORAGE_KEY = 'quickfire_session_token';
 export const SERVER_URL_STORAGE_KEY = 'quickfire_custom_server_url';
 
+export function hasServerConfigured(): boolean {
+  try {
+    const custom = localStorage.getItem(SERVER_URL_STORAGE_KEY);
+    if (custom && custom.trim()) return true;
+  } catch {}
+  return !!import.meta.env.VITE_SERVER_URL;
+}
+
 export function resolveServerUrl(): string {
   try {
     const custom = localStorage.getItem(SERVER_URL_STORAGE_KEY);
@@ -14,19 +22,22 @@ export function resolveServerUrl(): string {
     return import.meta.env.VITE_SERVER_URL;
   }
 
-  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
     return 'http://localhost:3001';
   }
 
-  // Fallback to origin
-  return typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3001';
+  // If on Vercel or cloud static host without explicit server, don't point to origin (Vercel can't host WebSockets)
+  return '';
 }
 
-export let socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(resolveServerUrl(), {
+const serverUrl = resolveServerUrl();
+
+export let socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(serverUrl || 'http://localhost:3001', {
   autoConnect: false,
-  reconnection: true,
-  reconnectionAttempts: 15,
+  reconnection: !!serverUrl,
+  reconnectionAttempts: 5,
   reconnectionDelay: 1000,
+  timeout: 3000,
 });
 
 export function updateServerUrl(newUrl: string): void {
