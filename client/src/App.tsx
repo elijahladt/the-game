@@ -331,65 +331,6 @@ export function App() {
 
   const localEngineRef = useRef<LocalGameEngine | null>(null);
 
-  // Helper to create and enter a local lobby instantly
-  const createLocalRoom = useCallback(
-    (isTestMode: boolean = true, targetRound: number = 5, code?: string) => {
-      setIsLoading(false);
-      setErrorMessage(null);
-      const roomCode = code || Math.random().toString(36).substring(2, 8).toUpperCase();
-      const myId = 'local-user';
-      setCurrentPlayerId(myId);
-
-      const userPlayer: PlayerState = {
-        id: myId,
-        socketId: 'local-sock',
-        username,
-        avatarSeed: username.toLowerCase(),
-        isReady: true,
-        isHost: true,
-        isConnected: true,
-        currentRound: 1,
-        roundCorrectAnswers: 0,
-        totalScore: 0,
-        highestRound: 1,
-        totalSubmissions: 0,
-        correctSubmissions: 0,
-        fastestAnswerMs: 999999,
-        focusStatus: {
-          violationsCount: 0,
-          lastViolationTimestamp: 0,
-          isLockedOut: false,
-          lockedUntil: 0,
-          isDisqualified: false,
-          penaltyLog: [],
-        },
-      };
-
-      const localMatch: MatchSummary = {
-        matchId: `local-${Date.now()}`,
-        roomCode,
-        isPrivate: true,
-        status: 'waiting',
-        winnerPlayerId: null,
-        winnerUsername: null,
-        settings: {
-          targetRound,
-          questionTimeLimitSeconds: 30,
-          minPlayersToStart: 1,
-          maxPlayers: 12,
-          antiCheatEnabled: true,
-          isTestMode,
-        },
-        players: {
-          [myId]: userPlayer,
-        },
-      };
-
-      setMatch(localMatch);
-    },
-    [username]
-  );
-
   const handleStartSolo = useCallback(() => {
     setIsLoading(false);
     setErrorMessage(null);
@@ -540,9 +481,8 @@ export function App() {
       setErrorMessage(null);
       clearSessionToken();
 
-      if (isConnected && socket.connected) {
+      const emitCreate = () => {
         setIsLoading(true);
-
         socket.emit(
           'lobby:create',
           { username, isPrivate: true, isTestMode, targetRound },
@@ -557,21 +497,31 @@ export function App() {
                 url.searchParams.set('room', res.roomCode);
                 window.history.replaceState({}, '', url.toString());
               }
-            } else if (res.success && res.roomCode) {
-              if (res.sessionToken) saveSessionToken(res.sessionToken);
-              createLocalRoom(isTestMode, targetRound, res.roomCode);
             } else {
-              createLocalRoom(isTestMode, targetRound);
+              setErrorMessage(res?.error || 'Failed to create room on server');
             }
           }
         );
+      };
+
+      if (!socket.connected) {
+        setIsLoading(true);
+        socket.connect();
+        const timeout = setTimeout(() => {
+          setIsLoading(false);
+          setErrorMessage('Connecting to game server (Render)... If the server was sleeping, please wait a few seconds and try again.');
+        }, 8000);
+
+        socket.once('connect', () => {
+          clearTimeout(timeout);
+          emitCreate();
+        });
         return;
       }
 
-      // Offline / Instant
-      createLocalRoom(isTestMode, targetRound);
+      emitCreate();
     },
-    [username, isConnected, createLocalRoom]
+    [username]
   );
 
   const handleJoinRoom = useCallback(
@@ -579,9 +529,13 @@ export function App() {
       setErrorMessage(null);
       const cleanCode = roomCode.trim().toUpperCase();
 
-      if (isConnected && socket.connected) {
-        setIsLoading(true);
+      if (cleanCode.length !== 6) {
+        setErrorMessage('Room code must be exactly 6 characters');
+        return;
+      }
 
+      const emitJoin = () => {
+        setIsLoading(true);
         socket.emit('lobby:join', { username, roomCode: cleanCode }, (res: any) => {
           setIsLoading(false);
           if (res.success && res.match) {
@@ -591,20 +545,30 @@ export function App() {
             const url = new URL(window.location.href);
             url.searchParams.set('room', cleanCode);
             window.history.replaceState({}, '', url.toString());
-          } else if (res.success && res.roomCode) {
-            if (res.sessionToken) saveSessionToken(res.sessionToken);
-            createLocalRoom(true, 5, cleanCode);
           } else {
-            setErrorMessage(res?.error || 'Failed to join room');
+            setErrorMessage(res?.error || `Room code "${cleanCode}" not found or already started.`);
           }
+        });
+      };
+
+      if (!socket.connected) {
+        setIsLoading(true);
+        socket.connect();
+        const timeout = setTimeout(() => {
+          setIsLoading(false);
+          setErrorMessage('Connecting to game server (Render)... If the server was sleeping, please wait a few seconds and try again.');
+        }, 8000);
+
+        socket.once('connect', () => {
+          clearTimeout(timeout);
+          emitJoin();
         });
         return;
       }
 
-      // Offline / Instant
-      createLocalRoom(true, 5, cleanCode);
+      emitJoin();
     },
-    [username, isConnected, createLocalRoom]
+    [username]
   );
 
   const handleToggleReady = useCallback((ready: boolean) => {
@@ -811,6 +775,7 @@ export function App() {
             onOpenRules={() => setShowRules(true)}
             isLoading={isLoading}
             errorMessage={errorMessage}
+            isConnected={isConnected}
           />
         ) : winnerInfo || match.status === 'completed' ? (
           <ResultsScreen

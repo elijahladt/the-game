@@ -24,11 +24,12 @@ export function resolveServerUrl(): string {
     return import.meta.env.VITE_SERVER_URL;
   }
 
-  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-    return 'http://localhost:3001';
+  // If running directly on the deployed Render host, use window.location.origin
+  if (typeof window !== 'undefined' && window.location.origin.includes('onrender.com')) {
+    return window.location.origin;
   }
 
-  // Authoritative Render Production Server
+  // Authoritative Render Production Server (always used by default)
   return DEFAULT_PRODUCTION_SERVER;
 }
 
@@ -38,9 +39,10 @@ export let socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(serve
   autoConnect: true,
   transports: ['websocket', 'polling'],
   reconnection: true,
-  reconnectionAttempts: 15,
+  reconnectionAttempts: Infinity,
   reconnectionDelay: 1000,
-  timeout: 5000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000,
 });
 
 export function updateServerUrl(newUrl: string): void {

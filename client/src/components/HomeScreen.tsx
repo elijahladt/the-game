@@ -10,6 +10,7 @@ interface HomeScreenProps {
   onOpenRules: () => void;
   isLoading: boolean;
   errorMessage: string | null;
+  isConnected?: boolean;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
@@ -21,6 +22,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenRules,
   isLoading,
   errorMessage,
+  isConnected = true,
 }) => {
   const [joinCode, setJoinCode] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -61,6 +63,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         First correct answer takes the point. Advance through escalating rounds independently.
         Can you conquer Round 10 before your rivals?
       </p>
+
+      {/* Connection Notice if socket is waking up */}
+      {!isConnected && (
+        <div className="w-full max-w-md mb-4 px-3.5 py-2 rounded-xl bg-amber-950/60 border border-amber-800 text-amber-300 text-xs text-center flex items-center justify-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>Connecting to game server (Render)... If inactive, please allow a few seconds.</span>
+        </div>
+      )}
 
       {/* Error alert if any */}
       {errorMessage && (
