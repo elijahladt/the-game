@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   MatchSummary,
   ClientQuestion,
@@ -11,6 +11,7 @@ import {
   getSavedSessionToken,
   clearSessionToken,
 } from './services/socket';
+import { LocalGameEngine } from './services/localGame';
 import { sound } from './utils/sound';
 import { Navbar } from './components/Navbar';
 import { RulesModal } from './components/RulesModal';
@@ -357,7 +358,68 @@ export function App() {
     socket.emit('lobby:add_bot');
   }, []);
 
+  const localEngineRef = useRef<LocalGameEngine | null>(null);
+
+  const handleStartSolo = useCallback(() => {
+    setIsLoading(false);
+    setErrorMessage(null);
+    setWinnerInfo(null);
+    setCurrentPlayerId('local-user');
+
+    const engine = new LocalGameEngine(username, 3, {
+      onQuestionAssigned: (data) => {
+        setActiveQuestion(data.question);
+        setRound(data.round);
+        setRoundProgress(data.progress);
+        setRequiredForRound(data.required);
+        setAnswerFeedback({ status: 'idle', message: '' });
+      },
+      onAnswerResult: (data) => {
+        setTotalScore(data.totalScore);
+        setRoundProgress(data.roundProgress);
+        setRequiredForRound(data.requiredForRound);
+
+        if (data.correct) {
+          sound.playCorrect();
+          setAnswerFeedback({
+            status: 'correct',
+            message: data.earnedPoint ? 'Correct! +1 Point' : 'Correct!',
+            earnedPoint: data.earnedPoint,
+            canonical: data.canonicalAnswer,
+          });
+        } else {
+          sound.playIncorrect();
+          setAnswerFeedback({
+            status: 'incorrect',
+            message: data.message,
+          });
+        }
+
+        if (data.roundAdvanced) {
+          sound.playRoundUp();
+          if (data.newRound) setRound(data.newRound);
+        }
+      },
+      onLeaderboardUpdated: (board) => {
+        setLeaderboard(board);
+      },
+      onMatchCompleted: (data) => {
+        setWinnerInfo({ id: data.winnerId, name: data.winnerName });
+        setLeaderboard(data.finalLeaderboard);
+        setMatchStats(data.matchStats);
+      },
+    });
+
+    localEngineRef.current = engine;
+    const summary = engine.start();
+    setMatch(summary);
+  }, [username]);
+
   const handleLeaveLobby = useCallback(() => {
+    if (localEngineRef.current) {
+      localEngineRef.current.cleanup();
+      localEngineRef.current = null;
+    }
     socket.emit('lobby:leave');
     clearSessionToken();
     setMatch(null);
@@ -367,6 +429,11 @@ export function App() {
 
   const handleSubmitAnswer = useCallback(
     (instanceId: string, answer: string): Promise<{ correct?: boolean; earnedPoint?: boolean; error?: string }> => {
+      if (localEngineRef.current) {
+        const res = localEngineRef.current.submitAnswer(answer);
+        return Promise.resolve(res);
+      }
+
       return new Promise((resolve) => {
         socket.emit('question:submit_answer', { instanceId, answer }, (res) => {
           resolve(res);
@@ -377,9 +444,13 @@ export function App() {
   );
 
   const handleRematch = useCallback(() => {
+    if (localEngineRef.current) {
+      handleStartSolo();
+      return;
+    }
     socket.emit('match:rematch');
     setWinnerInfo(null);
-  }, []);
+  }, [handleStartSolo]);
 
   const handleReturnHome = useCallback(() => {
     handleLeaveLobby();
@@ -413,9 +484,11 @@ export function App() {
             username={username}
             onUsernameChange={handleUsernameChange}
             onQuickPlay={handleQuickPlay}
+            onStartSolo={handleStartSolo}
             onCreateRoom={handleCreateRoom}
             onJoinRoom={handleJoinRoom}
             onOpenRules={() => setShowRules(true)}
+            isConnected={isConnected}
             isLoading={isLoading}
             errorMessage={errorMessage}
           />
